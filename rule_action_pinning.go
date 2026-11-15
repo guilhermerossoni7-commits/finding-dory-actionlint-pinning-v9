@@ -1,9 +1,37 @@
 package actionlint
 
 import (
+	"fmt"
 	"regexp"
 	"strings"
+
+	"go.yaml.in/yaml/v4"
 )
+
+func parseActionPinningLevel(value string) (ActionPinningLevel, error) {
+	switch value {
+	case "major-minor":
+		return ActionPinningMajorMinor, nil
+	case "semver":
+		return ActionPinningSemver, nil
+	case "commit-sha":
+		return ActionPinningCommitSHA, nil
+	default:
+		return 0, fmt.Errorf("invalid action pinning level %q: expected major-minor, semver, or commit-sha", value)
+	}
+}
+
+// UnmarshalYAML implements yaml.Unmarshaler.
+func (level *ActionPinningLevel) UnmarshalYAML(n *yaml.Node) error {
+	if n.Kind != yaml.ScalarNode || n.Tag != "!!str" {
+		return fmt.Errorf("action pinning level must be a string")
+	}
+	v, err := parseActionPinningLevel(n.Value)
+	if err == nil {
+		*level = v
+	}
+	return err
+}
 
 // ActionPinningLevel specifies the required precision of an action reference.
 type ActionPinningLevel uint8

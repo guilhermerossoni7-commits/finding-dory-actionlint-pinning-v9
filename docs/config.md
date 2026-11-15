@@ -28,6 +28,9 @@ config-variables:
   - JOB_NAME
   - ENVIRONMENT_STAGE
 
+# null (or omission) disables action pinning. {} enables it with SemVer.
+action-pinning: {}
+
 # Path-specific configurations.
 paths:
   # Glob pattern relative to the repository root for matching files. The path separator is always '/'.
@@ -39,6 +42,9 @@ paths:
       - 'shellcheck reported issue in this script: SC2086:.+'
   # This pattern only matches '.github/workflows/release.yaml' file.
   .github/workflows/release.yaml:
+    # Require a full lowercase commit SHA for actions and reusable workflows.
+    action-pinning:
+      level: commit-sha
     ignore:
       # Ignore errors from the old runner check. This may be useful for (outdated) self-hosted runner environment.
       - 'the runner of ".+" action is too old to run on GitHub Actions'
@@ -57,6 +63,31 @@ paths:
     - `ignore`: The configuration to ignore (filter) the errors by the error messages. This is an array of regular
       expressions. When one of the patterns matches the error message, the error will be ignored. It's similar to the
       `-ignore` command line option.
+    - `action-pinning`: Overrides the global action pinning configuration. `null` disables the rule, `{}` enables it
+      with the default `semver` level, and `{level: major-minor}` or `{level: commit-sha}` selects another level.
+      A path can enable the rule even when it is disabled globally. Omitting this key inherits the global setting.
+
+## Action pinning
+
+The optional `action-pinning` mapping checks `uses` in steps and reusable workflow jobs. It is disabled when omitted
+or set to `null`. An empty mapping (`{}`) enables the default `semver` level. The `level` field accepts:
+
+| Level | Accepted references |
+| --- | --- |
+| `major-minor` | Major and minor versions such as `v1.2`, plus everything accepted by `semver` |
+| `semver` | Major, minor, and patch versions such as `v1.2.3`, including pre-release and build metadata, plus full commit SHAs |
+| `commit-sha` | Exactly 40 lowercase hexadecimal characters |
+
+Version references may have an optional `v` prefix. Local references, Docker actions, and expressions are skipped.
+When multiple path patterns match, they are applied in alphabetical order; the last explicit `action-pinning` setting
+wins. Path settings override the global setting.
+
+The `-action-pinning-level` flag enables the rule and overrides only its level, taking precedence over global and path
+settings, including `null`. Other settings, such as error ignore patterns, still apply:
+
+```sh
+actionlint -action-pinning-level commit-sha
+```
 
 ## Generate the initial configuration
 

@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 
 	"github.com/bmatcuk/doublestar/v4"
@@ -43,12 +44,36 @@ func (pats *IgnorePatterns) UnmarshalYAML(n *yaml.Node) error {
 	return nil
 }
 
+// ActionPinningConfig enables action pinning with the specified level. An empty object uses SemVer.
+type ActionPinningConfig struct {
+	Level ActionPinningLevel `yaml:"level"`
+}
+
 // PathConfig is a configuration for specific file path pattern. This is for values of the "paths" mapping
 // in the configuration file.
 type PathConfig struct {
 	// Ignore is a list of patterns. They are used for ignoring errors by matching to the error messages.
 	// It is similar to the "-ignore" command line option.
 	Ignore IgnorePatterns `yaml:"ignore"`
+	// ActionPinning overrides the global rule configuration for matching paths.
+	ActionPinning    *ActionPinningConfig `yaml:"action-pinning"`
+	actionPinningSet bool
+}
+
+// UnmarshalYAML preserves the difference between an absent override and explicit null.
+func (cfg *PathConfig) UnmarshalYAML(n *yaml.Node) error {
+	type plain PathConfig
+	var value plain
+	if err := n.Decode(&value); err != nil {
+		return err
+	}
+	*cfg = PathConfig(value)
+	for i := 0; i+1 < len(n.Content); i += 2 {
+		if n.Content[i].Value == "action-pinning" {
+			cfg.actionPinningSet = true
+		}
+	}
+	return nil
 }
 
 // Config is configuration of actionlint. This struct instance is parsed from "actionlint.yaml"
@@ -67,6 +92,8 @@ type Config struct {
 	// Paths is a "paths" mapping in the configuration file. The keys are glob patterns to match file paths.
 	// And the values are corresponding configurations applied to the file paths.
 	Paths map[string]PathConfig `yaml:"paths"`
+	// ActionPinning is disabled when nil; an empty object enables the SemVer level.
+	ActionPinning *ActionPinningConfig `yaml:"action-pinning"`
 }
 
 // PathConfigs returns a list of all PathConfig values matching to the given file path. The path must
@@ -76,10 +103,15 @@ func (cfg *Config) PathConfigs(path string) []PathConfig {
 
 	var ret []PathConfig
 	if cfg != nil {
-		for p, c := range cfg.Paths {
+		keys := make([]string, 0, len(cfg.Paths))
+		for p := range cfg.Paths {
+			keys = append(keys, p)
+		}
+		slices.Sort(keys)
+		for _, p := range keys {
 			// Glob patterns were validated in `ParseConfig()`
 			if doublestar.MatchUnvalidated(p, path) {
-				ret = append(ret, c)
+				ret = append(ret, cfg.Paths[p])
 			}
 		}
 	}
@@ -143,6 +175,10 @@ func writeDefaultConfigFile(path string) error {
 # Empty array means no configuration variable is allowed.
 config-variables: null
 
+# null disables action pinning. {} enables it with the semver level.
+# Available levels: major-minor, semver, commit-sha.
+action-pinning: null
+
 # Configuration for file paths. The keys are glob patterns to match to file
 # paths relative to the repository root. The values are the configurations for
 # the file paths. Note that the path separator is always '/'.
@@ -153,6 +189,7 @@ config-variables: null
 paths:
 #  .github/workflows/**/*.yml:
 #    ignore: []
+#    action-pinning: {level: commit-sha}
 `)
 	if err := os.WriteFile(path, b, 0644); err != nil {
 		return fmt.Errorf("could not write default configuration file at %q: %w", path, err)

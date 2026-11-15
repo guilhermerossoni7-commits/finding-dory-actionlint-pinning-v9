@@ -61,6 +61,11 @@ func TestConfigParseError(t *testing.T) {
 		in   string
 		want string
 	}{
+		{in: `action-pinning: {level: unknown}`, want: `invalid action pinning level`},
+		{in: `action-pinning: {level: 42}`, want: `action pinning level must be a string`},
+		{in: `action-pinning: true`, want: `cannot unmarshal`},
+		{in: `action-pinning: []`, want: `cannot unmarshal`},
+		{in: `paths: {"*.yaml": {action-pinning: {level: unknown}}}`, want: `invalid action pinning level`},
 		{
 			in:   `self-hosted-runner: 42`,
 			want: `cannot unmarshal`,
@@ -98,6 +103,30 @@ paths:
 			}
 			if !strings.Contains(err.Error(), tc.want) {
 				t.Fatalf("wanted error message %q to contain %q", err.Error(), tc.want)
+			}
+		})
+	}
+}
+
+func TestConfigActionPinning(t *testing.T) {
+	for _, tc := range []struct {
+		source string
+		want   *ActionPinningConfig
+	}{
+		{"", nil},
+		{"action-pinning: null", nil},
+		{"action-pinning: {}", &ActionPinningConfig{Level: ActionPinningSemver}},
+		{"action-pinning: {level: major-minor}", &ActionPinningConfig{Level: ActionPinningMajorMinor}},
+		{"action-pinning: {level: semver}", &ActionPinningConfig{Level: ActionPinningSemver}},
+		{"action-pinning: {level: commit-sha}", &ActionPinningConfig{Level: ActionPinningCommitSHA}},
+	} {
+		t.Run(tc.source, func(t *testing.T) {
+			cfg, err := ParseConfig([]byte(tc.source))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if diff := cmp.Diff(tc.want, cfg.ActionPinning); diff != "" {
+				t.Fatal(diff)
 			}
 		})
 	}

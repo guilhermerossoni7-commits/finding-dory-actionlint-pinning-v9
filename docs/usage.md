@@ -42,6 +42,10 @@ processes.
 actionlint -shellcheck= -pyflakes=
 ```
 
+Use `-action-pinning-level major-minor`, `-action-pinning-level semver`, or `-action-pinning-level commit-sha` to enable
+action pinning and override the configured level for all checked files. See [action pinning configuration](config.md#action-pinning)
+for the accepted references and path overrides.
+
 <a id="format"></a>
 ### Format error messages
 

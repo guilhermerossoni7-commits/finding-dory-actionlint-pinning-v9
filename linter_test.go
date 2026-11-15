@@ -21,6 +21,104 @@ import (
 
 type testErrorReader struct{}
 
+const actionPinningTestWorkflow = `on: push
+jobs:
+  steps:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: owner/repo@v1.2
+      - uses: owner/repo@v1.2.3
+  reusable:
+    uses: owner/repo/.github/workflows/ci.yml@v1.2.3
+`
+
+func TestLinterActionPinningProjectPaths(t *testing.T) {
+	root := t.TempDir()
+	cfg, err := ParseConfig([]byte("paths: {'.github/workflows/*.yaml': {action-pinning: {}}}"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	l, err := NewLinter(io.Discard, &LinterOptions{WorkingDir: filepath.Join(root, "subdir")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, path := range []string{filepath.Join(root, ".github/workflows/ci.yaml"), "../.github/workflows/ci.yaml"} {
+		errs, err := l.Lint(path, []byte(actionPinningTestWorkflow), &Project{root: root, config: cfg})
+		if err != nil || len(errs) != 1 || errs[0].Kind != "action-pinning" {
+			t.Fatalf("path=%q: got errors=%v err=%v", path, errs, err)
+		}
+	}
+}
+
+func TestLinterActionPinningInvalidOption(t *testing.T) {
+	level := ActionPinningLevel(255)
+	if _, err := NewLinter(io.Discard, &LinterOptions{ActionPinningLevel: &level}); err == nil {
+		t.Fatal("expected invalid level error")
+	}
+}
+
+func TestLinterActionPinningConfig(t *testing.T) {
+	for _, tc := range []struct {
+		name, config, flag string
+		enabled            bool
+		want               int
+	}{
+		{"absent", "", "", false, 0},
+		{"null", "action-pinning: null", "", false, 0},
+		{"empty object", "action-pinning: {}", "", true, 1},
+		{"major minor", "action-pinning: {level: major-minor}", "", true, 0},
+		{"sha", "action-pinning: {level: commit-sha}", "", true, 3},
+		{"path only", "paths: {'*.yaml': {action-pinning: {}}}", "", true, 1},
+		{"path enables null", "action-pinning: null\npaths: {'*.yaml': {action-pinning: {}}}", "", true, 1},
+		{"path overrides", "action-pinning: {level: commit-sha}\npaths: {'*.yaml': {action-pinning: {level: major-minor}}}", "", true, 0},
+		{"path empty resets", "action-pinning: {level: commit-sha}\npaths: {'*.yaml': {action-pinning: {}}}", "", true, 1},
+		{"path null disables", "action-pinning: {}\npaths: {'*.yaml': {action-pinning: null}}", "", false, 0},
+		{"path absent inherits", "action-pinning: {}\npaths: {'*.yaml': {ignore: []}}", "", true, 1},
+		{"path unmatched", "paths: {'other.yaml': {action-pinning: {}}}", "", false, 0},
+		{"overlapping paths", "paths: {'*.yaml': {action-pinning: {level: commit-sha}}, 'workflow.yaml': {action-pinning: {}}}", "", true, 1},
+		{"flag only", "", "semver", true, 1},
+		{"flag enables null", "action-pinning: null", "commit-sha", true, 3},
+		{"flag overrides global", "action-pinning: {level: commit-sha}", "major-minor", true, 0},
+		{"flag overrides path", "paths: {'*.yaml': {action-pinning: {level: major-minor}}}", "commit-sha", true, 3},
+		{"flag enables path null", "paths: {'*.yaml': {action-pinning: null}}", "semver", true, 1},
+		{"flag preserves ignores", "paths: {'*.yaml': {ignore: ['must be pinned']}}", "commit-sha", true, 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			configFile := filepath.Join(t.TempDir(), "actionlint.yaml")
+			if err := os.WriteFile(configFile, []byte(tc.config), 0600); err != nil {
+				t.Fatal(err)
+			}
+			var registered bool
+			opts := LinterOptions{ConfigFile: configFile, OnRulesCreated: func(rules []Rule) []Rule {
+				for _, r := range rules {
+					if r.Name() == "action-pinning" {
+						registered = true
+					}
+				}
+				return rules
+			}}
+			if tc.flag != "" {
+				level, err := parseActionPinningLevel(tc.flag)
+				if err != nil {
+					t.Fatal(err)
+				}
+				opts.ActionPinningLevel = &level
+			}
+			l, err := NewLinter(io.Discard, &opts)
+			if err != nil {
+				t.Fatal(err)
+			}
+			errs, err := l.Lint("workflow.yaml", []byte(actionPinningTestWorkflow), nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(errs) != tc.want || registered != tc.enabled {
+				t.Fatalf("got enabled=%t errors=%v; want enabled=%t errors=%d", registered, errs, tc.enabled, tc.want)
+			}
+		})
+	}
+}
+
 func (r testErrorReader) Read(p []byte) (int, error) {
 	return 0, errors.New("dummy read error")
 }

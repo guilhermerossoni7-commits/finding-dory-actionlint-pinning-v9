@@ -55,6 +55,10 @@ with Go template syntax.
   * `-config-file` <PATH>:
     File path to config file
 
+  * `-action-pinning-level` <LEVEL>:
+    Enable action pinning and override its level, including path settings. Available levels are
+    "major-minor", "semver", and "commit-sha".
+
   * `-debug`:
     Enable debug output (for development)
 
