@@ -80,7 +80,8 @@ or set to `null`. An empty mapping (`{}`) enables the default `semver` level. Th
 
 Version references may have an optional `v` prefix. Local references, Docker actions, and expressions are skipped.
 When multiple path patterns match, they are applied in alphabetical order; the last explicit `action-pinning` setting
-wins. Path settings override the global setting.
+determines whether the rule is enabled and which level is used. Path settings override the global setting; filter lists
+are combined as described below.
 
 The `-action-pinning-level` flag enables the rule and overrides only its level, taking precedence over global and path
 settings, including `null`. Other settings, such as error ignore patterns, still apply:
@@ -88,6 +89,32 @@ settings, including `null`. Other settings, such as error ignore patterns, still
 ```sh
 actionlint -action-pinning-level commit-sha
 ```
+
+The `allowed-owners`, `allowed-actions`, `denied-owners`, and `denied-actions` lists control exemptions from pinning:
+
+```yaml
+action-pinning:
+  level: commit-sha
+  allowed-owners: [trusted-org]
+  allowed-actions: [another-org/helper]
+  denied-owners: [strict-org]
+  denied-actions: [trusted-org/deploy]
+paths:
+  .github/workflows/release.yaml:
+    action-pinning:
+      level: commit-sha
+      allowed-actions: [release-org/helper]
+      denied-actions: [another-org/helper]
+```
+
+Each list is the union of its global entries and entries from every matching path; an empty list does not remove inherited
+entries. Owners and `owner/repo` names are matched without case sensitivity. Owner entries cannot contain slashes; action
+entries must be exactly `owner/repo`, without a ref or subpath. They also match subactions and reusable workflows in that
+repository. Entries are literal names, not glob patterns.
+
+An allowed entry skips pinning unless any denied owner or action also matches. A denied entry only restores the normal
+pinning check: it does not block an action whose reference satisfies the selected level. The command line level override
+preserves all four lists, including when it re-enables a rule disabled by a path's `null` setting.
 
 ## Generate the initial configuration
 

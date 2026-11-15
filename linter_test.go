@@ -119,6 +119,62 @@ func TestLinterActionPinningConfig(t *testing.T) {
 	}
 }
 
+func TestLinterActionPinningListUnion(t *testing.T) {
+	source := actionPinningTestWorkflow
+	for _, repo := range []string{"one", "two", "three"} {
+		source = strings.Replace(source, "owner/repo", "owner/"+repo, 1)
+	}
+	for _, tc := range []struct {
+		name, config string
+		flag         bool
+		want         int
+	}{
+		{"union allowed actions", "action-pinning: {level: commit-sha, allowed-actions: [owner/one]}\npaths: {'*.yaml': {action-pinning: {level: commit-sha, allowed-actions: [owner/two]}}}", false, 1},
+		{"union allowed owners", "action-pinning: {level: commit-sha, allowed-owners: [other]}\npaths: {'*.yaml': {action-pinning: {level: commit-sha, allowed-owners: [OWNER]}}}", false, 0},
+		{"global denial wins", "action-pinning: {level: commit-sha, denied-actions: [owner/one]}\npaths: {'*.yaml': {action-pinning: {level: commit-sha, allowed-owners: [owner]}}}", false, 1},
+		{"path denial wins", "action-pinning: {level: commit-sha, allowed-owners: [owner]}\npaths: {'*.yaml': {action-pinning: {level: commit-sha, denied-actions: [owner/two]}}}", false, 1},
+		{"union denied actions", "action-pinning: {level: commit-sha, allowed-owners: [owner], denied-actions: [owner/one]}\npaths: {'*.yaml': {action-pinning: {level: commit-sha, denied-actions: [owner/two]}}}", false, 2},
+		{"global denied owner", "action-pinning: {level: commit-sha, denied-owners: [OWNER]}\npaths: {'*.yaml': {action-pinning: {level: commit-sha, allowed-owners: [owner]}}}", false, 3},
+		{"union denied owners", "action-pinning: {level: commit-sha, allowed-owners: [owner], denied-owners: [other]}\npaths: {'*.yaml': {action-pinning: {level: commit-sha, denied-owners: [OWNER]}}}", false, 3},
+		{"multiple matches", "action-pinning: {allowed-actions: [owner/one]}\npaths: {'*.yaml': {action-pinning: {allowed-actions: [owner/two]}}, 'workflow.yaml': {action-pinning: {allowed-actions: [owner/three]}}}", true, 0},
+		{"unmatched path", "action-pinning: {level: commit-sha, allowed-actions: [owner/one]}\npaths: {'other.yaml': {action-pinning: {allowed-owners: [owner]}}}", false, 2},
+		{"empty does not clear", "action-pinning: {allowed-owners: [owner]}\npaths: {'*.yaml': {action-pinning: {allowed-owners: [], allowed-actions: [], denied-owners: [], denied-actions: []}}}", true, 0},
+		{"flag preserves lists", "action-pinning: {allowed-actions: [owner/one]}\npaths: {'*.yaml': {action-pinning: {allowed-actions: [owner/two]}}}", true, 1},
+		{"flag restores null with lists", "action-pinning: {allowed-owners: [owner]}\npaths: {'*.yaml': {action-pinning: null}}", true, 0},
+		{"null disables", "action-pinning: {denied-owners: [owner]}\npaths: {'*.yaml': {action-pinning: null}}", false, 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg, err := ParseConfig([]byte(tc.config))
+			if err != nil {
+				t.Fatal(err)
+			}
+			opts := LinterOptions{}
+			if tc.flag {
+				level := ActionPinningCommitSHA
+				opts.ActionPinningLevel = &level
+			}
+			l, err := NewLinter(io.Discard, &opts)
+			if err != nil {
+				t.Fatal(err)
+			}
+			l.defaultConfig = cfg
+			for i := 0; i < 2; i++ {
+				errs, err := l.Lint("workflow.yaml", []byte(source), nil)
+				if err != nil || len(errs) != tc.want {
+					t.Fatalf("got errors=%v err=%v; want %d diagnostics", errs, err, tc.want)
+				}
+			}
+			original, err := ParseConfig([]byte(tc.config))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if diff := cmp.Diff(original, cfg, cmp.AllowUnexported(PathConfig{})); diff != "" {
+				t.Fatal("linting mutated the configuration:", diff)
+			}
+		})
+	}
+}
+
 func (r testErrorReader) Read(p []byte) (int, error) {
 	return 0, errors.New("dummy read error")
 }

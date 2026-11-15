@@ -132,3 +132,48 @@ func TestRuleActionPinningSkipOtherNodes(t *testing.T) {
 		t.Fatal("unexpected errors:", r.Errs())
 	}
 }
+
+func TestRuleActionPinningLists(t *testing.T) {
+	for _, tc := range []struct {
+		config, uses string
+		want         int
+	}{
+		{"allowed-owners: [OWNER]", "owner/repo@main", 0},
+		{"allowed-owners: [owner]", "OWNER/repo@main", 0},
+		{"allowed-owners: [other]", "owner/repo@main", 1},
+		{"allowed-actions: [OWNER/REPO]", "owner/repo@main", 0},
+		{"allowed-actions: [owner/repo]", "owner/repo/subaction@main", 0},
+		{"allowed-actions: [owner/repo]", "owner/another@main", 1},
+		{"allowed-actions: [owner/repo]", "owner/repository@main", 1},
+		{"allowed-owners: [owner]\ndenied-owners: [OWNER]", "owner/repo@main", 1},
+		{"allowed-owners: [owner]\ndenied-actions: [OWNER/REPO]", "owner/repo@main", 1},
+		{"allowed-actions: [owner/repo]\ndenied-owners: [OWNER]", "owner/repo@main", 1},
+		{"allowed-actions: [owner/repo]\ndenied-actions: [OWNER/REPO]", "owner/repo@main", 1},
+		{"allowed-owners: [owner]\ndenied-actions: [owner/another]", "owner/repo@main", 0},
+		{"denied-owners: [OWNER]", "owner/repo@0123456789abcdef0123456789abcdef01234567", 0},
+		{"denied-actions: [OWNER/REPO]", "owner/repo@0123456789abcdef0123456789abcdef01234567", 0},
+		{"allowed-owners: [owner]\ndenied-actions: [owner/repo]", "owner/repo@0123456789abcdef0123456789abcdef01234567", 0},
+	} {
+		for _, job := range []bool{false, true} {
+			t.Run(fmt.Sprintf("job=%t/%s/%s", job, tc.config, tc.uses), func(t *testing.T) {
+				cfg, err := ParseConfig([]byte("action-pinning:\n  " + strings.ReplaceAll(tc.config, "\n", "\n  ")))
+				if err != nil {
+					t.Fatal(err)
+				}
+				r := NewRuleActionPinning()
+				r.ActionPinningConfig = *cfg.ActionPinning
+				r.Level = ActionPinningCommitSHA
+				u := &String{Value: tc.uses, Pos: &Pos{}}
+				if job {
+					u.Value = strings.Replace(u.Value, "@", "/.github/workflows/ci.yml@", 1)
+					err = r.VisitJobPre(&Job{WorkflowCall: &WorkflowCall{Uses: u}})
+				} else {
+					err = r.VisitStep(&Step{Exec: &ExecAction{Uses: u}})
+				}
+				if err != nil || len(r.Errs()) != tc.want {
+					t.Fatalf("got errors=%v err=%v; want %d diagnostics", r.Errs(), err, tc.want)
+				}
+			})
+		}
+	}
+}

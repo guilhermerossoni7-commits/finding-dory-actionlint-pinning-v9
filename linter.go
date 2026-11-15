@@ -594,20 +594,22 @@ func (l *Linter) check(
 			NewRuleDeprecatedCommands(),
 			NewRuleIfCond(),
 		}
-		var pinning *ActionPinningConfig
-		if cfg != nil {
-			pinning = cfg.ActionPinning
+		var pinning ActionPinningConfig
+		enabled := cfg != nil && cfg.ActionPinning != nil
+		if enabled {
+			pinning.merge(cfg.ActionPinning)
 		}
 		for _, c := range pathConfigs {
 			if c.actionPinningSet || c.ActionPinning != nil {
-				pinning = c.ActionPinning
+				enabled = c.ActionPinning != nil
+				if enabled {
+					pinning.merge(c.ActionPinning)
+				}
 			}
 		}
-		if pinning != nil || l.actionPinningLevel != nil {
+		if enabled || l.actionPinningLevel != nil {
 			r := NewRuleActionPinning()
-			if pinning != nil {
-				r.Level = pinning.Level
-			}
+			r.ActionPinningConfig = pinning
 			if l.actionPinningLevel != nil {
 				r.Level = *l.actionPinningLevel
 			}

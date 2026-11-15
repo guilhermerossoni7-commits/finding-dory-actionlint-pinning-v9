@@ -317,3 +317,33 @@ func TestConfigGenerateDefaultConfigFileError(t *testing.T) {
 		t.Fatalf("unexpected error message: %q", msg)
 	}
 }
+
+func TestConfigActionPinningListFormats(t *testing.T) {
+	for _, field := range []string{"allowed-owners", "denied-owners", "allowed-actions", "denied-actions"} {
+		entries := []string{"''", "'owner/repo'", "' owner'", "'owner@main'", "'*'", "'owner\\repo'"}
+		valid := "Owner-1"
+		if strings.HasSuffix(field, "actions") {
+			entries = []string{"''", "'owner'", "'/repo'", "'owner/'", "'owner/repo/path'", "'owner/repo@v1'", "'owner/re po'", "'owner/*'"}
+			valid = "Owner-1/repo_name.js"
+		}
+		for _, entry := range entries {
+			for _, prefix := range []string{"action-pinning: ", "paths: {'*.yaml': {action-pinning: "} {
+				source := prefix + "{" + field + ": [" + entry + "]}"
+				if strings.HasPrefix(prefix, "paths:") {
+					source += "}}"
+				}
+				if _, err := ParseConfig([]byte(source)); err == nil || !strings.Contains(err.Error(), field) {
+					t.Errorf("source=%s: wanted %s validation error, got %v", source, field, err)
+				}
+			}
+		}
+		for _, value := range []string{"[" + valid + "]", "[]", "null"} {
+			if _, err := ParseConfig([]byte("action-pinning: {" + field + ": " + value + "}")); err != nil {
+				t.Errorf("field=%s value=%s: %v", field, value, err)
+			}
+		}
+		if _, err := ParseConfig([]byte("action-pinning: {" + field + ": owner/repo}")); err == nil {
+			t.Errorf("field=%s: expected an error for a scalar instead of a list", field)
+		}
+	}
+}

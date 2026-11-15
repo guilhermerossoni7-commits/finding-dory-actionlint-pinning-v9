@@ -3,6 +3,7 @@ package actionlint
 import (
 	"fmt"
 	"regexp"
+	"slices"
 	"strings"
 
 	"go.yaml.in/yaml/v4"
@@ -48,8 +49,8 @@ const (
 // RuleActionPinning checks that remote actions and reusable workflows use pinned references.
 type RuleActionPinning struct {
 	RuleBase
-	// Level defaults to ActionPinningSemver.
-	Level ActionPinningLevel
+	// ActionPinningConfig specifies the level (SemVer by default) and pinning exemptions.
+	ActionPinningConfig
 }
 
 // NewRuleActionPinning creates a new RuleActionPinning instance.
@@ -96,7 +97,13 @@ func (rule *RuleActionPinning) checkUses(uses *String) {
 	if uses == nil || uses.Value == "" || uses.ContainsExpression() || strings.HasPrefix(uses.Value, "./") {
 		return
 	}
-	_, ref, _ := strings.Cut(uses.Value, "@")
+	action, ref, _ := strings.Cut(uses.Value, "@")
+	owner, rest, _ := strings.Cut(action, "/")
+	repo, _, _ := strings.Cut(rest, "/")
+	if repo != "" && rule.matches(rule.AllowedOwners, rule.AllowedActions, owner, repo) &&
+		!rule.matches(rule.DeniedOwners, rule.DeniedActions, owner, repo) {
+		return
+	}
 	valid := reActionPinningSHA.MatchString(ref)
 	var requirement string
 	switch rule.Level {
@@ -115,4 +122,9 @@ func (rule *RuleActionPinning) checkUses(uses *String) {
 	if !valid {
 		rule.Errorf(uses.Pos, "%q at \"uses\" must be pinned to %s", uses.Value, requirement)
 	}
+}
+
+func (rule *RuleActionPinning) matches(owners, actions []string, owner, repo string) bool {
+	return slices.ContainsFunc(owners, func(entry string) bool { return strings.EqualFold(entry, owner) }) ||
+		slices.ContainsFunc(actions, func(entry string) bool { return strings.EqualFold(entry, owner+"/"+repo) })
 }

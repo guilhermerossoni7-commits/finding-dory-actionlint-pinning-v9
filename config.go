@@ -47,6 +47,52 @@ func (pats *IgnorePatterns) UnmarshalYAML(n *yaml.Node) error {
 // ActionPinningConfig enables action pinning with the specified level. An empty object uses SemVer.
 type ActionPinningConfig struct {
 	Level ActionPinningLevel `yaml:"level"`
+	// Allowed entries skip pinning unless a denied entry also matches.
+	AllowedOwners  []string `yaml:"allowed-owners"`
+	AllowedActions []string `yaml:"allowed-actions"`
+	DeniedOwners   []string `yaml:"denied-owners"`
+	DeniedActions  []string `yaml:"denied-actions"`
+}
+
+var (
+	reActionPinningOwner  = regexp.MustCompile(`\A[A-Za-z0-9-]+\z`)
+	reActionPinningAction = regexp.MustCompile(`\A[A-Za-z0-9-]+/[A-Za-z0-9_.-]+\z`)
+)
+
+// UnmarshalYAML validates owner and repository filters when reading configuration.
+func (cfg *ActionPinningConfig) UnmarshalYAML(n *yaml.Node) error {
+	type plain ActionPinningConfig
+	var value plain
+	if err := n.Decode(&value); err != nil {
+		return err
+	}
+	for _, list := range []struct {
+		name    string
+		entries []string
+		pattern *regexp.Regexp
+		format  string
+	}{
+		{"allowed-owners", value.AllowedOwners, reActionPinningOwner, "an owner without slashes"},
+		{"allowed-actions", value.AllowedActions, reActionPinningAction, "owner/repo"},
+		{"denied-owners", value.DeniedOwners, reActionPinningOwner, "an owner without slashes"},
+		{"denied-actions", value.DeniedActions, reActionPinningAction, "owner/repo"},
+	} {
+		for _, entry := range list.entries {
+			if !list.pattern.MatchString(entry) {
+				return fmt.Errorf("invalid entry %q in action-pinning.%s: expected %s", entry, list.name, list.format)
+			}
+		}
+	}
+	*cfg = ActionPinningConfig(value)
+	return nil
+}
+
+func (cfg *ActionPinningConfig) merge(other *ActionPinningConfig) {
+	cfg.Level = other.Level
+	cfg.AllowedOwners = append(cfg.AllowedOwners, other.AllowedOwners...)
+	cfg.AllowedActions = append(cfg.AllowedActions, other.AllowedActions...)
+	cfg.DeniedOwners = append(cfg.DeniedOwners, other.DeniedOwners...)
+	cfg.DeniedActions = append(cfg.DeniedActions, other.DeniedActions...)
 }
 
 // PathConfig is a configuration for specific file path pattern. This is for values of the "paths" mapping
@@ -177,6 +223,8 @@ config-variables: null
 
 # null disables action pinning. {} enables it with the semver level.
 # Available levels: major-minor, semver, commit-sha.
+# allowed-owners and allowed-actions skip pinning; denied-owners and denied-actions
+# take precedence and restore pinning checks. Lists are combined across paths.
 action-pinning: null
 
 # Configuration for file paths. The keys are glob patterns to match to file
