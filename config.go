@@ -114,11 +114,12 @@ func (cfg *PathConfig) UnmarshalYAML(n *yaml.Node) error {
 		return err
 	}
 	*cfg = PathConfig(value)
-	for i := 0; i+1 < len(n.Content); i += 2 {
-		if n.Content[i].Value == "action-pinning" {
-			cfg.actionPinningSet = true
-		}
+	// Decode a mapping so inherited null values from YAML merges count as explicit overrides.
+	var fields map[string]yaml.Node
+	if err := n.Decode(&fields); err != nil {
+		return err
 	}
+	_, cfg.actionPinningSet = fields["action-pinning"]
 	return nil
 }
 
