@@ -78,7 +78,11 @@ or set to `null`. An empty mapping (`{}`) enables the default `semver` level. Th
 | `semver` | Major, minor, and patch versions such as `v1.2.3`, including pre-release and build metadata, plus full commit SHAs |
 | `commit-sha` | Exactly 40 lowercase hexadecimal characters |
 
-Version references may have an optional `v` prefix. Local references, Docker actions, and expressions are skipped.
+Version references may have an optional `v` prefix. References starting with `./` or `docker://` are skipped. A dynamic
+action or workflow name is also skipped, but a static name with a dynamic version reports that pinning cannot be verified
+(unless an allowed entry exempts it). Diagnostics distinguish actions from reusable workflows. For actions, a known
+reference from the bundled `PopularActions` dataset is suggested when it satisfies the selected level. The suggestion is
+an example from that dataset, not necessarily the latest release; versions and commit SHAs are not invented.
 When multiple path patterns match, they are applied in alphabetical order; the last explicit `action-pinning` setting
 determines whether the rule is enabled and which level is used. Path settings override the global setting; filter lists
 are combined as described below.

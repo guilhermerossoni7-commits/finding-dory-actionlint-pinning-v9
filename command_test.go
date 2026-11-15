@@ -67,3 +67,29 @@ func TestCommandActionPinningLevel(t *testing.T) {
 		})
 	}
 }
+
+func TestCommandActionPinningDynamicReferences(t *testing.T) {
+	source := `on: push
+jobs:
+  steps:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: owner/repo@${{ github.ref }}
+      - uses: ${{ github.repository }}@main
+      - uses: ./local@${{ github.ref }}
+      - uses: docker://alpine:${{ github.ref }}
+  reusable:
+    uses: owner/repo/.github/workflows/ci.yml@${{ github.ref }}
+`
+	var output bytes.Buffer
+	cmd := Command{Stdin: strings.NewReader(source), Stdout: &output, Stderr: &output}
+	status := cmd.Main([]string{"actionlint", "-shellcheck=", "-pyflakes=", "-no-color", "-action-pinning-level=semver", "-"})
+	if status != 1 || strings.Count(output.String(), "[action-pinning]") != 2 {
+		t.Fatalf("got status=%d output=%s; want two pinning errors", status, &output)
+	}
+	for _, kind := range []string{"action", "reusable workflow"} {
+		if !strings.Contains(output.String(), "cannot verify pinning of "+kind+" ") {
+			t.Errorf("missing %s diagnostic: %s", kind, &output)
+		}
+	}
+}

@@ -51,8 +51,16 @@ func TestRuleActionPinning(t *testing.T) {
 		{"owner/repo@", false, false, false},
 		{"owner/repo", false, false, false},
 		{"./local", true, true, true},
+		{"./local@${{ inputs.ref }}", true, true, true},
+		{"docker://alpine:latest", true, true, true},
+		{"docker://alpine:${{ inputs.tag }}", true, true, true},
 		{"${{ inputs.action }}", true, true, true},
-		{"owner/repo@${{ inputs.ref }}", true, true, true},
+		{"${{ inputs.owner }}/repo@main", true, true, true},
+		{"owner/${{ inputs.repo }}@main", true, true, true},
+		{"${{ 'owner/repo@main' }}", true, true, true},
+		{"owner/repo@${{ inputs.ref }}", false, false, false},
+		{"owner/repo@v1.${{ inputs.minor }}.0", false, false, false},
+		{"owner/repo@${{ 'v1.2.3@other' }}", false, false, false},
 		{"", true, true, true},
 	}
 	for _, level := range []ActionPinningLevel{ActionPinningMajorMinor, ActionPinningSemver, ActionPinningCommitSHA} {
@@ -81,7 +89,15 @@ func TestRuleActionPinning(t *testing.T) {
 					}
 					if want > 0 {
 						e := r.Errs()[0]
-						if e.Kind != "action-pinning" || e.Line != 3 || e.Column != 11 || !strings.HasPrefix(e.Message, fmt.Sprintf("%q at \"uses\" must be pinned to ", u.Value)) {
+						kind := "action"
+						if job {
+							kind = "reusable workflow"
+						}
+						prefix := fmt.Sprintf("%s %q at \"uses\" must be pinned to ", kind, u.Value)
+						if u.ContainsExpression() {
+							prefix = fmt.Sprintf("cannot verify pinning of %s %q at \"uses\" because its version is a dynamic expression", kind, u.Value)
+						}
+						if e.Kind != "action-pinning" || e.Line != 3 || e.Column != 11 || !strings.HasPrefix(e.Message, prefix) {
 							t.Fatalf("unexpected diagnostic: %v", e)
 						}
 					}
@@ -140,6 +156,8 @@ func TestRuleActionPinningLists(t *testing.T) {
 	}{
 		{"allowed-owners: [OWNER]", "owner/repo@main", 0},
 		{"allowed-owners: [owner]", "OWNER/repo@main", 0},
+		{"allowed-owners: [owner]", "owner/repo@${{ inputs.ref }}", 0},
+		{"allowed-owners: [owner]\ndenied-actions: [owner/repo]", "owner/repo@${{ inputs.ref }}", 1},
 		{"allowed-owners: [other]", "owner/repo@main", 1},
 		{"allowed-actions: [OWNER/REPO]", "owner/repo@main", 0},
 		{"allowed-actions: [owner/repo]", "owner/repo/subaction@main", 0},
@@ -175,5 +193,41 @@ func TestRuleActionPinningLists(t *testing.T) {
 				}
 			})
 		}
+	}
+}
+
+func TestRuleActionPinningSuggestions(t *testing.T) {
+	for _, tc := range []struct {
+		uses       string
+		level      ActionPinningLevel
+		suggestion string
+	}{
+		{"actions/add-to-project@main", ActionPinningSemver, "actions/add-to-project@v1.0.1"},
+		{"ACTIONS/ADD-TO-PROJECT@main", ActionPinningMajorMinor, "actions/add-to-project@v1.0.1"},
+		{"SamKirkland/FTP-Deploy-Action@v4", ActionPinningSemver, "SamKirkland/FTP-Deploy-Action@v4.3.6"},
+		{"actions/add-to-project@${{ inputs.ref }}", ActionPinningSemver, "actions/add-to-project@v1.0.1"},
+		{"actions/add-to-project@main", ActionPinningCommitSHA, ""},
+		{"actions/checkout@v6", ActionPinningSemver, ""},
+		{"actions/add-to-project/subaction@main", ActionPinningSemver, ""},
+		{"owner/unknown@main", ActionPinningSemver, ""},
+	} {
+		t.Run(fmt.Sprintf("level=%d/%s", tc.level, tc.uses), func(t *testing.T) {
+			for i := 0; i < 3; i++ {
+				r := NewRuleActionPinning()
+				r.Level = tc.level
+				err := r.VisitStep(&Step{Exec: &ExecAction{Uses: &String{Value: tc.uses, Pos: &Pos{}}}})
+				if err != nil || len(r.Errs()) != 1 {
+					t.Fatalf("got errors=%v err=%v", r.Errs(), err)
+				}
+				message := r.Errs()[0].Message
+				if tc.suggestion == "" {
+					if strings.Contains(message, "for example") {
+						t.Fatal("unexpected suggestion:", message)
+					}
+				} else if !strings.HasSuffix(message, fmt.Sprintf("; for example, use %q", tc.suggestion)) {
+					t.Fatal("missing known version suggestion:", message)
+				}
+			}
+		})
 	}
 }

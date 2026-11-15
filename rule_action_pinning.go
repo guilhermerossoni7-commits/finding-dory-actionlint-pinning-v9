@@ -66,9 +66,7 @@ func NewRuleActionPinning() *RuleActionPinning {
 // VisitStep is callback when visiting Step node.
 func (rule *RuleActionPinning) VisitStep(n *Step) error {
 	if e, ok := n.Exec.(*ExecAction); ok {
-		if e.Uses != nil && !strings.HasPrefix(e.Uses.Value, "docker://") {
-			rule.checkUses(e.Uses)
-		}
+		rule.checkUses(e.Uses, "action")
 	}
 	return nil
 }
@@ -76,7 +74,7 @@ func (rule *RuleActionPinning) VisitStep(n *Step) error {
 // VisitJobPre is callback when visiting Job node before visiting its children.
 func (rule *RuleActionPinning) VisitJobPre(n *Job) error {
 	if n.WorkflowCall != nil {
-		rule.checkUses(n.WorkflowCall.Uses)
+		rule.checkUses(n.WorkflowCall.Uses, "reusable workflow")
 	}
 	return nil
 }
@@ -93,25 +91,25 @@ var (
 		`(-` + actionPinningPrerelease + `(\.` + actionPinningPrerelease + `)*)?(\+[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?\z`)
 )
 
-func (rule *RuleActionPinning) checkUses(uses *String) {
-	if uses == nil || uses.Value == "" || uses.ContainsExpression() || strings.HasPrefix(uses.Value, "./") {
+func (rule *RuleActionPinning) checkUses(uses *String, kind string) {
+	if uses == nil || uses.Value == "" || strings.HasPrefix(uses.Value, "./") || strings.HasPrefix(uses.Value, "docker://") {
 		return
 	}
 	action, ref, _ := strings.Cut(uses.Value, "@")
+	if strings.Contains(action, "${{") && uses.ContainsExpression() {
+		return
+	}
 	owner, rest, _ := strings.Cut(action, "/")
 	repo, _, _ := strings.Cut(rest, "/")
 	if repo != "" && rule.matches(rule.AllowedOwners, rule.AllowedActions, owner, repo) &&
 		!rule.matches(rule.DeniedOwners, rule.DeniedActions, owner, repo) {
 		return
 	}
-	valid := reActionPinningSHA.MatchString(ref)
 	var requirement string
 	switch rule.Level {
 	case ActionPinningMajorMinor:
-		valid = valid || reActionPinningMajorMinor.MatchString(ref) || reActionPinningSemver.MatchString(ref)
 		requirement = "a major.minor version, a semantic version, or a full lowercase 40-character commit SHA"
 	case ActionPinningSemver:
-		valid = valid || reActionPinningSemver.MatchString(ref)
 		requirement = "a semantic version or a full lowercase 40-character commit SHA"
 	case ActionPinningCommitSHA:
 		requirement = "a full lowercase 40-character commit SHA"
@@ -119,9 +117,43 @@ func (rule *RuleActionPinning) checkUses(uses *String) {
 		rule.Errorf(uses.Pos, "invalid action pinning level %d", rule.Level)
 		return
 	}
-	if !valid {
-		rule.Errorf(uses.Pos, "%q at \"uses\" must be pinned to %s", uses.Value, requirement)
+	if rule.isPinned(ref) {
+		return
 	}
+	message := fmt.Sprintf("%s %q at \"uses\" must be pinned to %s", kind, uses.Value, requirement)
+	if ContainsExpression(ref) {
+		message = fmt.Sprintf("cannot verify pinning of %s %q at \"uses\" because its version is a dynamic expression", kind, uses.Value)
+	}
+	if kind == "action" {
+		if suggestion := rule.suggestion(action); suggestion != "" {
+			message += fmt.Sprintf("; for example, use %q", suggestion)
+		}
+	}
+	rule.Error(uses.Pos, message)
+}
+
+func (rule *RuleActionPinning) isPinned(ref string) bool {
+	switch rule.Level {
+	case ActionPinningMajorMinor:
+		return reActionPinningSHA.MatchString(ref) || reActionPinningSemver.MatchString(ref) || reActionPinningMajorMinor.MatchString(ref)
+	case ActionPinningSemver:
+		return reActionPinningSHA.MatchString(ref) || reActionPinningSemver.MatchString(ref)
+	case ActionPinningCommitSHA:
+		return reActionPinningSHA.MatchString(ref)
+	default:
+		return false
+	}
+}
+
+func (rule *RuleActionPinning) suggestion(action string) string {
+	var suggestion string
+	for spec := range PopularActions {
+		name, ref, _ := strings.Cut(spec, "@")
+		if strings.EqualFold(name, action) && rule.isPinned(ref) && (suggestion == "" || spec < suggestion) {
+			suggestion = spec
+		}
+	}
+	return suggestion
 }
 
 func (rule *RuleActionPinning) matches(owners, actions []string, owner, repo string) bool {
